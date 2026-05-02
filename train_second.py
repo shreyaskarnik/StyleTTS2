@@ -929,6 +929,21 @@ def main(config_path):
             save_path = osp.join(log_dir, "epoch_2nd_%05d.pth" % epoch)
             torch.save(state, save_path)
 
+            # v0.4.1: per-module weight norms — catches the kind of catastrophic
+            # weight shrinkage we saw in v0.4.0 (decoder/predictor/encoders all
+            # shrunk 50-72% in epoch 1). If we'd printed this in v0.4.0 we'd
+            # have caught the failure pre-WAV-listening.
+            print(f"\n[epoch {epoch} weight norms]")
+            for key in model:
+                sd = state["net"][key]
+                norm = sum(
+                    v.float().norm().item() ** 2
+                    for v in sd.values()
+                    if torch.is_tensor(v) and v.is_floating_point()
+                ) ** 0.5
+                print(f"  ||{key}||  {norm:>10.3f}")
+            print()
+
             # if estimate sigma, save the estimated sigma
             if model_params.diffusion.dist.estimate_sigma_data:
                 config["model_params"]["diffusion"]["dist"]["sigma_data"] = float(

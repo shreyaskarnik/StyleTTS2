@@ -14,7 +14,14 @@ class CustomAlbert(AlbertModel):
     def __init__(self, config):
         super().__init__(config)
         self.lang_embedding = torch.nn.Embedding(NUM_LANGUAGES, config.embedding_size)
-        torch.nn.init.normal_(self.lang_embedding.weight, std=0.02)
+        # Zero-init: lang_embedding contribution is EXACTLY 0 at step 0 → PLBERT
+        # output matches the pre-v0.4 baseline → no OOD shock to predictor on
+        # continuation. The lang signal grows from zero as gradient flows in.
+        # std=0.02 random init was the v0.4.0 setting; it caused 50-70% weight
+        # shrinkage in trained modules during epoch 1 (decoder/predictor/etc.)
+        # because the random perturbation pushed PLBERT output OOD relative to
+        # what v0.2 was tuned on, producing catastrophic gradients.
+        torch.nn.init.zeros_(self.lang_embedding.weight)
 
     def forward(self, input_ids=None, lang_ids=None, attention_mask=None, **kwargs):
         if lang_ids is not None and input_ids is not None:
