@@ -15,20 +15,22 @@ import torchaudio
 
 logger = logging.getLogger(__name__)
 
-# German phonetic test sentences — same set as scripts/test_inference.py
+# Marathi + Minglish phonetic test sentences for TensorBoard inference previews.
+# Coverage: greeting + retroflex, weather + ल/प/ब, place names, numbers,
+# Minglish (Latin English embedded in Marathi context).
 TEST_SENTENCES = [
-    "Schön, dass du da bist. Die Bücher liegen auf dem großen Tisch.",
-    "Ich mache mich auf den Weg nach Aachen, um auch nachts wach zu sein.",
-    "Er aß die Maße in der Straße, aber das Maß war voll.",
-    "Zwei weiße Zwerge zwängen sich zwischen zwei Zweige.",
-    "Ein Pfau pflegt seine Federn an der Pfütze.",
-    "Warum hast du das getan? Das ist ja unglaublich!",
-    "Das kostet genau einhundertdreiundzwanzig Millionen Euro.",
+    "नमस्कार मी मराठी बोलतो.",
+    "आज हवामान खूप छान आहे, पाऊस पडतो आहे.",
+    "मुंबई ही महाराष्ट्राची राजधानी आहे.",
+    "एक दोन तीन चार पाच सहा सात आठ.",
+    "मी Google मध्ये काम करतो.",
+    "Coffee पिऊया का?",
+    "Weekend ला movie बघायचा plan आहे का?",
 ]
 
 
 def prepare_test_tokens(text_cleaner):
-    """Convert German test sentences to token ID lists via espeak G2P.
+    """Convert Marathi/Minglish test sentences to token ID lists via espeak G2P.
 
     Returns a list of (display_text, token_ids) tuples. Sentences that
     fail G2P or produce sequences longer than 510 tokens are skipped.
@@ -36,9 +38,9 @@ def prepare_test_tokens(text_cleaner):
     try:
         from misaki import espeak
 
-        g2p = espeak.EspeakG2P(language="de")
+        g2p = espeak.EspeakG2P(language="mr")
     except Exception as e:
-        logger.warning(f"Could not load German G2P for TensorBoard inference: {e}")
+        logger.warning(f"Could not load Marathi G2P for TensorBoard inference: {e}")
         return []
 
     result = []
@@ -46,7 +48,6 @@ def prepare_test_tokens(text_cleaner):
         try:
             g2p_out = g2p(text)
             ipa = g2p_out[0] if isinstance(g2p_out, tuple) else g2p_out
-            ipa = ipa.replace("\u028f", "y")  # ʏ → y fixup
             token_ids = text_cleaner(ipa)
             if not token_ids or len(token_ids) > 510:
                 logger.warning(
