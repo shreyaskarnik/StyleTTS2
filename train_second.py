@@ -7,7 +7,9 @@ from munch import Munch
 import numpy as np
 import torch
 
-torch.autograd.set_detect_anomaly(True)
+import os as _os
+if _os.environ.get("STYLETTS2_DETECT_ANOMALY", "0") == "1":
+    torch.autograd.set_detect_anomaly(True)
 
 if getattr(torch, "_original_load", None) is None:
     torch._original_load = torch.load
@@ -247,13 +249,19 @@ def main(config_path):
             config["pretrained_model"],
             load_only_params=config.get("load_only_params", True),
         )
-        # Ensure all modules are in train() mode after loading
-        # (load_checkpoint sets them to eval(), which breaks spectral_norm)
+        # Ensure all modules are in train mode after loading
+        # (load_checkpoint sets them to eval mode, which breaks spectral_norm)
         _ = [model[key].train() for key in model]
 
-        # Initialize predictor_encoder from trained style_encoder
-        # (predictor_encoder is not trained in Stage 1)
-        model.predictor_encoder = copy.deepcopy(model.style_encoder)
+        # v0.4 fix: when continuing from a Stage-2 ckpt the loaded
+        # predictor_encoder is already trained (v0.2's prosody specialization).
+        # Resetting it to style_encoder.deepcopy here would wipe that out,
+        # leaving us worse than the baseline. Skip the reset unless explicitly
+        # requested. (The reset is still performed in the not-load_pretrained
+        # branch above, which is the correct Stage-2-from-Stage-1 path.)
+        if config.get("reset_predictor_encoder_on_load", False):
+            print("Resetting predictor_encoder = copy(style_encoder) per config flag")
+            model.predictor_encoder = copy.deepcopy(model.style_encoder)
 
     # DP — must happen AFTER load_checkpoint so state dict keys match
     # (DataParallel adds 'module.' prefix which breaks strict=False loading)
@@ -353,6 +361,7 @@ def main(config_path):
                 mels,
                 mel_input_length,
                 ref_mels,
+                lang_ids,
             ) = batch
 
             with torch.no_grad():
@@ -418,7 +427,9 @@ def main(config_path):
             gs = torch.stack(gs).squeeze(1)  # global acoustic styles
             s_trg = torch.cat([gs, s_dur], dim=-1).detach()  # ground truth for denoiser
 
-            bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
+            bert_dur = model.bert(
+                texts, lang_ids=lang_ids, attention_mask=(~text_mask).int()
+            )
             if bert_dur is not None and torch.isnan(bert_dur).any():
                 print(
                     "NaN detected in bert_dur after bert_dur = model.bert(texts, attention_mask=(~text_mask).int())"
@@ -773,6 +784,7 @@ def main(config_path):
                         mels,
                         mel_input_length,
                         ref_mels,
+                        lang_ids,
                     ) = batch
                     with torch.no_grad():
                         mask = length_to_mask(mel_input_length // (2**n_down)).to(
@@ -811,7 +823,9 @@ def main(config_path):
                     gs = torch.stack(gs).squeeze(1)
                     s_trg = torch.cat([s, gs], dim=-1).detach()
 
-                    bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
+                    bert_dur = model.bert(
+                        texts, lang_ids=lang_ids, attention_mask=(~text_mask).int()
+                    )
                     d_en = model.bert_encoder(bert_dur).transpose(-1, -2)
                     d, p = model.predictor(
                         d_en, s, input_lengths, s2s_attn_mono, text_mask

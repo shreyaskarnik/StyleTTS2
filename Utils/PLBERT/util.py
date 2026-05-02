@@ -3,19 +3,39 @@ import yaml
 import torch
 from transformers import AlbertConfig, AlbertModel
 
-class CustomAlbert(AlbertModel):
-    def forward(self, *args, **kwargs):
-        # Call the original forward method
-        outputs = super().forward(*args, **kwargs)
+# v0.4: per-token language conditioning. Lang ids are added at the embedding
+# layer so every downstream consumer (encoder stack, bert_encoder, predictor
+# text_encoder, duration_proj, F0/N predictor) sees the language signal.
+# 0=mr, 1=en. Optional (None disables — gives v0.1/0.2/0.3 baseline path).
+NUM_LANGUAGES = 2
 
-        # Only return the last_hidden_state
+
+class CustomAlbert(AlbertModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.lang_embedding = torch.nn.Embedding(NUM_LANGUAGES, config.embedding_size)
+        torch.nn.init.normal_(self.lang_embedding.weight, std=0.02)
+
+    def forward(self, input_ids=None, lang_ids=None, attention_mask=None, **kwargs):
+        if lang_ids is not None and input_ids is not None:
+            word_embeds = self.embeddings.word_embeddings(input_ids)
+            lang_embeds = self.lang_embedding(lang_ids)
+            outputs = super().forward(
+                inputs_embeds=word_embeds + lang_embeds,
+                attention_mask=attention_mask,
+                **kwargs,
+            )
+        else:
+            outputs = super().forward(
+                input_ids=input_ids, attention_mask=attention_mask, **kwargs
+            )
         return outputs.last_hidden_state
 
 
 def load_plbert(log_dir):
     config_path = os.path.join(log_dir, "config.yml")
     plbert_config = yaml.safe_load(open(config_path))
-    
+
     albert_base_configuration = AlbertConfig(**plbert_config['model_params'])
     bert = CustomAlbert(albert_base_configuration)
 

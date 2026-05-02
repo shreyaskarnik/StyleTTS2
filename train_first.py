@@ -245,7 +245,7 @@ def main(config_path):
         for i, batch in enumerate(train_dataloader):
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
-            texts, input_lengths, _, _, mels, mel_input_length, _ = batch
+            texts, input_lengths, _, _, mels, mel_input_length, _, _ = batch
 
             with torch.no_grad():
                 mask = length_to_mask(mel_input_length // (2**n_down)).to("cuda")
@@ -444,7 +444,7 @@ def main(config_path):
 
                 waves = batch[0]
                 batch = [b.to(device) for b in batch[1:]]
-                texts, input_lengths, _, _, mels, mel_input_length, _ = batch
+                texts, input_lengths, _, _, mels, mel_input_length, _, _ = batch
 
                 with torch.no_grad():
                     mask = length_to_mask(mel_input_length // (2**n_down)).to("cuda")

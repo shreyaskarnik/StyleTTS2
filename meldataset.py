@@ -58,8 +58,21 @@ class FilePathDataset(torch.utils.data.Dataset):
         spect_params = SPECT_PARAMS
         mel_params = MEL_PARAMS
 
+        # v0.4 manifest schema: wav|text|speaker|lang_ids (lang_ids optional;
+        # space-separated 0=mr/1=en ints, length = len(text_cleaner(text))).
+        # Back-compat: 3-col rows (v0.1/v0.2 manifests) get all-zero lang_ids.
         _data_list = [l.strip().split("|") for l in data_list]
-        self.data_list = [data if len(data) == 3 else (*data, 0) for data in _data_list]
+        normalized = []
+        for d in _data_list:
+            if len(d) == 2:
+                normalized.append((d[0], d[1], "0", ""))
+            elif len(d) == 3:
+                normalized.append((d[0], d[1], d[2], ""))
+            elif len(d) == 4:
+                normalized.append((d[0], d[1], d[2], d[3]))
+            else:
+                raise ValueError(f"Unexpected manifest row arity {len(d)}: {d}")
+        self.data_list = normalized
         self.text_cleaner = TextCleaner()
         self.sr = sr
 
@@ -68,7 +81,9 @@ class FilePathDataset(torch.utils.data.Dataset):
             d for d in self.data_list if len(self.text_cleaner(d[1])) <= 510
         ]
 
-        self.df = pd.DataFrame(self.data_list)
+        # df keeps only the wav/text/speaker columns (used for ref-clip lookup
+        # via speaker match — lang_ids irrelevant for ref selection).
+        self.df = pd.DataFrame([d[:3] for d in self.data_list])
 
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MEL_PARAMS)
 
@@ -92,7 +107,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         data = self.data_list[idx]
         path = data[0]
 
-        wave, text_tensor, speaker_id = self._load_tensor(data)
+        wave, text_tensor, speaker_id, lang_ids_tensor = self._load_tensor(data)
 
         mel_tensor = preprocess(wave).squeeze()
 
@@ -127,10 +142,13 @@ class FilePathDataset(torch.utils.data.Dataset):
             ref_label,
             path,
             wave,
+            lang_ids_tensor,
         )
 
     def _load_tensor(self, data):
-        wave_path, text, speaker_id = data
+        # data may be 3-tuple (legacy) or 4-tuple (with lang_ids string).
+        wave_path, text, speaker_id = data[0], data[1], data[2]
+        lang_ids_str = data[3] if len(data) >= 4 else ""
         speaker_id = int(speaker_id)
         wave, sr = sf.read(osp.join(self.root_path, wave_path))
         if wave.shape[-1] == 2:
@@ -148,10 +166,24 @@ class FilePathDataset(torch.utils.data.Dataset):
 
         text = torch.LongTensor(text)
 
-        return wave, text, speaker_id
+        # Parse lang_ids; must match text length INCLUDING boundary tokens.
+        # Empty string → all-zero (Marathi). Length mismatch fails loud.
+        if lang_ids_str:
+            ids = [int(x) for x in lang_ids_str.split()]
+            if len(ids) != len(text):
+                raise ValueError(
+                    f"lang_ids length {len(ids)} != tokenized text length {len(text)}"
+                    f" for {wave_path}"
+                )
+            lang_ids_tensor = torch.LongTensor(ids)
+        else:
+            lang_ids_tensor = torch.zeros(len(text), dtype=torch.long)
+
+        return wave, text, speaker_id, lang_ids_tensor
 
     def _load_data(self, data):
-        wave, text_tensor, speaker_id = self._load_tensor(data)
+        # ref clip — lang_ids unused (slmadv path doesn't condition on it).
+        wave, text_tensor, speaker_id, _ = self._load_tensor(data)
         mel_tensor = preprocess(wave).squeeze()
 
         mel_length = mel_tensor.size(1)
@@ -194,6 +226,9 @@ class Collater(object):
         mels = torch.zeros((batch_size, nmels, max_mel_length)).float()
         texts = torch.zeros((batch_size, max_text_length)).long()
         ref_texts = torch.zeros((batch_size, max_rtext_length)).long()
+        # lang_ids padded with 0 (mr) — matches text_pad_index semantics: a
+        # padded position is mr-language, ignored downstream via attention mask.
+        lang_ids = torch.zeros((batch_size, max_text_length)).long()
 
         input_lengths = torch.zeros(batch_size).long()
         ref_lengths = torch.zeros(batch_size).long()
@@ -212,6 +247,7 @@ class Collater(object):
             ref_label,
             path,
             wave,
+            lang_id_seq,
         ) in enumerate(batch):
             mel_size = mel.size(1)
             text_size = text.size(0)
@@ -220,6 +256,7 @@ class Collater(object):
             mels[bid, :, :mel_size] = mel
             texts[bid, :text_size] = text
             ref_texts[bid, :rtext_size] = ref_text
+            lang_ids[bid, :text_size] = lang_id_seq
             input_lengths[bid] = text_size
             ref_lengths[bid] = rtext_size
             output_lengths[bid] = mel_size
@@ -239,6 +276,7 @@ class Collater(object):
             mels,
             output_lengths,
             ref_mels,
+            lang_ids,
         )
 
 
