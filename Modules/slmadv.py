@@ -41,9 +41,22 @@ class SLMAdversarialLoss(torch.nn.Module):
         use_ind,
         s_trg,
         ref_s=None,
+        lang_ids=None,
     ):
+        # v0.5: thread lang_ids through to keep slmadv's bert + predictor calls
+        # consistent with the main training step. Without this the SLM
+        # adversarial loss optimizes against the un-conditioned forward pass,
+        # which actively pushes lang_embedding (v0.4) and FiLM γ/β (v0.5) back
+        # to identity — i.e. it trains the language signal away over time.
+        # OOD-text path (use_ind=False) has no per-token lang labels in the
+        # OOD corpus, so we default to all-zero (Marathi); single-language
+        # safe assumption that matches the main-step zero-padding semantics.
+        if lang_ids is None:
+            lang_ids = torch.zeros_like(ref_text)
         text_mask = length_to_mask(ref_lengths).to(ref_text.device)
-        bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
+        bert_dur = self.model.bert(
+            ref_text, lang_ids=lang_ids, attention_mask=(~text_mask).int()
+        )
         d_en = self.model.bert_encoder(bert_dur).transpose(-1, -2)
 
         if not self.diffusion_enabled:
@@ -80,6 +93,7 @@ class SLMAdversarialLoss(torch.nn.Module):
             ref_lengths,
             torch.randn(ref_lengths.shape[0], ref_lengths.max(), 2).to(ref_text.device),
             text_mask,
+            lang_ids=lang_ids,
         )
 
         bib = 0
@@ -132,7 +146,9 @@ class SLMAdversarialLoss(torch.nn.Module):
 
         asr_pred = t_en @ s2s_attn
 
-        _, p_pred = self.model.predictor(d_en, s_dur, ref_lengths, s2s_attn, text_mask)
+        _, p_pred = self.model.predictor(
+            d_en, s_dur, ref_lengths, s2s_attn, text_mask, lang_ids=lang_ids
+        )
 
         mel_len = max(int(min(output_lengths) / 2 - 1), self.min_len // 2)
         mel_len = min(mel_len, self.max_len // 2)
