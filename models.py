@@ -866,9 +866,26 @@ def load_checkpoint(model, optimizer, path, load_only_params=True, ignore_module
     params = state["net"]
     for key in model:
         if key in params and key not in ignore_modules:
-            print("%s loaded" % key)
-            model[key].load_state_dict(params[key], strict=False)
-    _ = [model[key].eval() for key in model]
+            sd = params[key]
+            # CRITICAL FIX: v0.2-vintage ckpts saved after DataParallel wrap have
+            # 'module.' prefix on every key. At load time model[key] is the bare
+            # module (DP wrap happens later). load_state_dict(strict=False) would
+            # silently skip every key — model stays at random init, but the print
+            # statement still fires so the silent failure looks like success.
+            # Strip 'module.' prefix here AND log missing/unexpected counts.
+            if any(k.startswith("module.") for k in sd.keys()):
+                sd = {(k[len("module."):] if k.startswith("module.") else k): v
+                      for k, v in sd.items()}
+            result = model[key].load_state_dict(sd, strict=False)
+            n_loaded = len(sd) - len(result.missing_keys)
+            print(f"{key} loaded ({n_loaded}/{len(sd)} params; "
+                  f"missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)})")
+            if result.missing_keys:
+                print(f"  missing sample: {result.missing_keys[:3]}")
+            if result.unexpected_keys:
+                print(f"  unexpected sample: {result.unexpected_keys[:3]}")
+    for key in model:
+        model[key].train(False)
 
     if not load_only_params:
         epoch = state["epoch"]

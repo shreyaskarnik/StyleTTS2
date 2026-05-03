@@ -1,12 +1,19 @@
 """
-Kokoro-82M Symbol Mapping for StyleTTS2
-=========================================
-Auto-generated from Kokoro-82M config.json.
-Replaces StyleTTS2's default symbol list in text_utils.py and meldataset.py.
+Kokoro-82M Symbol Mapping for StyleTTS2 — bol-tts Marathi fork
+===============================================================
+Forked from semidark/kokoro-deutsch's training/kokoro_symbols.py.
 
 CRITICAL: Kokoro and StyleTTS2 use different index assignments for the same
 178-token vocabulary. This file provides the exact mapping that matches
 Kokoro-82M's pre-trained embeddings.
+
+Marathi-specific change from upstream:
+- Index 144 (was unused PUA placeholder U+E029) → 'ɭ' (retroflex lateral U+026D)
+  Needed for Marathi ळ which misaki.espeak(language='mr') emits as /ɭ/.
+  E.g. काळ→kˈaːɭ, मुळा→mˈʊɭaː, खेळ→kʰˈeːɭ.
+
+No other changes. Voiced-aspirated stops (bʱ ɡʱ dʱ ɖʱ) are normalized by
+misaki to voiceless-aspirated ʰ at existing index 162 — no additional slot.
 
 Usage in StyleTTS2:
   from kokoro_symbols import symbols, dicts
@@ -159,7 +166,7 @@ symbols = [
     '\ue028',  # 141: (unused placeholder)
     'χ',  # 142: U+03C7 (χ)
     'ʎ',  # 143: U+028E (ʎ)
-    '\ue029',  # 144: (unused placeholder)
+    'ɭ',  # 144: U+026D (ɭ) — bol-tts Marathi: retroflex lateral for ळ (was U+E029 placeholder)
     '\ue02a',  # 145: (unused placeholder)
     '\ue02b',  # 146: (unused placeholder)
     'ʒ',  # 147: U+0292 (ʒ)
