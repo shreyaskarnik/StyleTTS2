@@ -282,20 +282,32 @@ def main(config_path):
     if freeze_backbone_epochs > 0:
         print(
             f"[v0.4.2] Freezing backbone for first {freeze_backbone_epochs} epoch(s); "
-            f"only lang_embedding trains during the freeze window"
+            f"only lang_embedding + lang_film trains during the freeze window"
         )
         for key in model:
             for p in model[key].parameters():
                 p.requires_grad_(False)
-        # Unfreeze lang_embedding (the only new v0.4 parameter)
+        # Unfreeze v0.4's lang_embedding (PLBERT input) and v0.5's FiLM γ/β (predictor).
+        # Both are new params not present in pre-v0.5 ckpts; they need to train
+        # from epoch 0 even during the backbone freeze.
+        n_lang_trainable = 0
         bert_inner = model.bert.module if hasattr(model.bert, "module") else model.bert
         if hasattr(bert_inner, "lang_embedding"):
             for p in bert_inner.lang_embedding.parameters():
                 p.requires_grad_(True)
-            n_lang = sum(p.numel() for p in bert_inner.lang_embedding.parameters())
-            print(f"[v0.4.2] lang_embedding trainable: {n_lang} params")
+            n_lang_trainable += sum(p.numel() for p in bert_inner.lang_embedding.parameters())
+        pred_inner = model.predictor.module if hasattr(model.predictor, "module") else model.predictor
+        if hasattr(pred_inner, "lang_gamma"):
+            for p in pred_inner.lang_gamma.parameters():
+                p.requires_grad_(True)
+            for p in pred_inner.lang_beta.parameters():
+                p.requires_grad_(True)
+            n_lang_trainable += sum(p.numel() for p in pred_inner.lang_gamma.parameters())
+            n_lang_trainable += sum(p.numel() for p in pred_inner.lang_beta.parameters())
+        if n_lang_trainable == 0:
+            print("[v0.4.2] WARNING: neither lang_embedding nor lang_film attrs found — nothing to train during freeze.")
         else:
-            print("[v0.4.2] WARNING: bert has no lang_embedding attr — nothing to train.")
+            print(f"[v0.4.2] lang params trainable during freeze: {n_lang_trainable}")
 
     n_down = model.text_aligner.n_down
 
@@ -533,7 +545,7 @@ def main(config_path):
                 loss_sty = 0
                 loss_diff = 0
 
-            d, p = model.predictor(d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)
+            d, p = model.predictor(d_en, s_dur, input_lengths, s2s_attn_mono, text_mask, lang_ids=lang_ids)
             if p is not None and torch.isnan(p).any():
                 print(
                     "NaN detected in p after d, p = model.predictor(d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)"
@@ -872,7 +884,7 @@ def main(config_path):
                     )
                     d_en = model.bert_encoder(bert_dur).transpose(-1, -2)
                     d, p = model.predictor(
-                        d_en, s, input_lengths, s2s_attn_mono, text_mask
+                        d_en, s, input_lengths, s2s_attn_mono, text_mask, lang_ids=lang_ids
                     )
                     # get clips
                     mel_len = int(mel_input_length.min().item() / 2 - 1)

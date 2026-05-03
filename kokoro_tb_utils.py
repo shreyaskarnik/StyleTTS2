@@ -181,6 +181,11 @@ def run_kokoro_inference(model, test_tokens, voicepack, device, text_cleaner):
                 d = model.predictor.text_encoder(
                     d_en, s_prosodic, input_lengths, text_mask
                 )
+                # v0.5: FiLM lang conditioning. lang_ids matches the bert_dur
+                # call above (all Marathi → row 0 → identity if γ=1 β=0). The
+                # hasattr-guard keeps pre-v0.5 ckpts working unchanged.
+                if hasattr(model.predictor, "apply_lang_film"):
+                    d = model.predictor.apply_lang_film(d, lang_ids)
                 x, _ = model.predictor.lstm(d)
                 duration = model.predictor.duration_proj(x)
                 duration = torch.sigmoid(duration).sum(axis=-1)

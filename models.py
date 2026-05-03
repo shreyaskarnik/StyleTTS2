@@ -546,12 +546,24 @@ class AdaLayerNorm(nn.Module):
 
 
 class ProsodyPredictor(nn.Module):
-    def __init__(self, style_dim, d_hid, nlayers, max_dur=50, dropout=0.1):
+    def __init__(self, style_dim, d_hid, nlayers, max_dur=50, dropout=0.1, num_languages=2):
         super().__init__()
 
         self.text_encoder = DurationEncoder(
             sty_dim=style_dim, d_model=d_hid, nlayers=nlayers, dropout=dropout
         )
+
+        # v0.5: FiLM language conditioning. Applied to text_encoder output
+        # (channel dim = d_hid + style_dim) before the LSTM. γ initialized to 1
+        # and β to 0 → identity at init, so an unconditioned ckpt can be loaded
+        # without behavior change. The downstream LSTM/duration_proj/F0Ntrain
+        # path has NO LayerNorm, so γ/β survive end-to-end (this is the v0.4
+        # bug we are fixing — input-side lang_embedding got renormalized away).
+        self.lang_film_dim = d_hid + style_dim
+        self.lang_gamma = nn.Embedding(num_languages, self.lang_film_dim)
+        self.lang_beta  = nn.Embedding(num_languages, self.lang_film_dim)
+        nn.init.ones_(self.lang_gamma.weight)
+        nn.init.zeros_(self.lang_beta.weight)
 
         self.lstm = nn.LSTM(
             d_hid + style_dim, d_hid // 2, 1, batch_first=True, bidirectional=True
@@ -586,8 +598,25 @@ class ProsodyPredictor(nn.Module):
         self.F0_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
         self.N_proj = nn.Conv1d(d_hid // 2, 1, 1, 1, 0)
 
-    def forward(self, texts, style, text_lengths, alignment, m):
+    def apply_lang_film(self, d, lang_ids):
+        """v0.5: per-token FiLM on text_encoder output.
+
+        d:        [B, T, C]   where C == self.lang_film_dim
+        lang_ids: [B, T] long tensor, or None to skip (identity, used for
+                  pre-v0.5 ckpt inference / unconditioned forward)
+
+        Returns d unchanged when lang_ids is None. Otherwise applies
+        γ[lang_ids] * d + β[lang_ids] elementwise per token.
+        """
+        if lang_ids is None:
+            return d
+        gamma = self.lang_gamma(lang_ids)  # [B, T, C]
+        beta  = self.lang_beta(lang_ids)   # [B, T, C]
+        return gamma * d + beta
+
+    def forward(self, texts, style, text_lengths, alignment, m, lang_ids=None):
         d = self.text_encoder(texts, style, text_lengths, m)
+        d = self.apply_lang_film(d, lang_ids)  # v0.5: lang conditioning
 
         batch_size = d.shape[0]
         text_size = d.shape[1]
