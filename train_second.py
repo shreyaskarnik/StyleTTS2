@@ -269,6 +269,34 @@ def main(config_path):
         if key != "mpd" and key != "msd" and key != "wd":
             model[key] = MyDataParallel(model[key])
 
+    # v0.4.2: optionally freeze the loaded backbone for first N epochs.
+    # Per the v0.4.0/4.1 post-mortem, even zero-init lang_embedding induced
+    # cascading gradient pressure that catastrophically reshaped the trained
+    # modules (decoder/predictor/encoders shrunk 50-72% in 1 epoch, biases
+    # collapsed to ~10% of original, specific conv weights amplified 4-7x).
+    # Freezing the backbone forces gradient ONLY into lang_embedding for the
+    # warmup, letting it learn meaningful labels before the trained modules
+    # see any optimization pressure. AdamW skips frozen params entirely
+    # (grad=None), so weight_decay also doesn't apply during the freeze window.
+    freeze_backbone_epochs = config.get("freeze_backbone_epochs", 0)
+    if freeze_backbone_epochs > 0:
+        print(
+            f"[v0.4.2] Freezing backbone for first {freeze_backbone_epochs} epoch(s); "
+            f"only lang_embedding trains during the freeze window"
+        )
+        for key in model:
+            for p in model[key].parameters():
+                p.requires_grad_(False)
+        # Unfreeze lang_embedding (the only new v0.4 parameter)
+        bert_inner = model.bert.module if hasattr(model.bert, "module") else model.bert
+        if hasattr(bert_inner, "lang_embedding"):
+            for p in bert_inner.lang_embedding.parameters():
+                p.requires_grad_(True)
+            n_lang = sum(p.numel() for p in bert_inner.lang_embedding.parameters())
+            print(f"[v0.4.2] lang_embedding trainable: {n_lang} params")
+        else:
+            print("[v0.4.2] WARNING: bert has no lang_embedding attr — nothing to train.")
+
     n_down = model.text_aligner.n_down
 
     best_loss = float("inf")  # best test loss
@@ -342,6 +370,22 @@ def main(config_path):
     for epoch in range(start_epoch, epochs):
         running_loss = 0
         start_time = time.time()
+
+        # v0.4.2: unfreeze backbone after freeze_backbone_epochs warmup.
+        # This compares against (start_epoch + freeze_backbone_epochs) so it
+        # works correctly with both load_only_params=true (start_epoch=0)
+        # and continuation (start_epoch=N).
+        if (
+            freeze_backbone_epochs > 0
+            and epoch == start_epoch + freeze_backbone_epochs
+        ):
+            print(
+                f"[v0.4.2] Unfreezing backbone at epoch {epoch} "
+                f"(after {freeze_backbone_epochs} warmup epoch(s))"
+            )
+            for key in model:
+                for p in model[key].parameters():
+                    p.requires_grad_(True)
 
         _ = [model[key].eval() for key in model]
 
