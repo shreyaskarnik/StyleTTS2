@@ -707,6 +707,12 @@ def main(config_path):
                 if use_ind:
                     ref_lengths = input_lengths
                     ref_texts = texts
+                    ref_lang_ids = lang_ids
+                else:
+                    # OOD-text path: OOD corpus has no per-token lang labels.
+                    # Pass None → slmadv defaults to all-zero (Marathi),
+                    # matching the main step's zero-padding semantics.
+                    ref_lang_ids = None
 
                 slm_out = slmadv(
                     i,
@@ -719,6 +725,7 @@ def main(config_path):
                     use_ind,
                     s_trg.detach(),
                     ref if multispeaker else None,
+                    lang_ids=ref_lang_ids,
                 )
 
                 if slm_out is None:
