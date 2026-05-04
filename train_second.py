@@ -707,6 +707,14 @@ def main(config_path):
                 if use_ind:
                     ref_lengths = input_lengths
                     ref_texts = texts
+                    # In-distribution path: reuse the training batch's lang_ids
+                    # (one-to-one with `texts`).
+                    ref_lang_ids = lang_ids
+                else:
+                    # OOD path: ref_texts come from OOD_data, no per-token labels.
+                    # Default to row 0 (mr) — same convention as
+                    # SLMAdversarialLoss.forward when lang_ids=None.
+                    ref_lang_ids = torch.zeros_like(ref_texts)
 
                 slm_out = slmadv(
                     i,
@@ -719,6 +727,7 @@ def main(config_path):
                     use_ind,
                     s_trg.detach(),
                     ref if multispeaker else None,
+                    lang_ids=ref_lang_ids,
                 )
 
                 if slm_out is None:
